@@ -1,0 +1,234 @@
+﻿@page "/game/{RoomCode}"
+@implements IDisposable
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+
+<h3>🎴 Свинтус Онлайн</h3>
+<p class="text-lg text-green-300 mb-4">Ты: @GetMyPlayerName()</p>
+
+@if (IsRoomFull)
+{
+    <p class="text-red">Комната заполнена. Попробуйте другую.</p>
+}
+else if (!IsConnected)
+{
+    <p>Подключение...</p>
+}
+else if (!IsGameStarted)
+{
+    <div class="waiting-block">
+        <p>Ожидание начала игры...</p>
+        <button @onclick="StartGame" class="btn btn-start">
+            Начать матч
+        </button>
+    </div>
+}
+else
+{
+    <div class="board-wrapper">
+        <div class="board-container">
+            @foreach (var p in Players)
+            {
+                var isCurrent = p.Id == Turn;
+                <div class="player-avatar @(isCurrent ? "current" : "")" style="@GetPlayerStyle(p.Id)">
+                    <img src="@p.Avatar" />
+                    <p>@p.Name</p>
+                </div>
+            }
+
+            <div class="deck" @onclick="DrawCard">
+                <img src="/cards/Back.png" width="96" height="144" />
+            </div>
+        </div>
+        <div class="discard">
+            @if (DiscardTop != null)
+            {
+                <img src="@DiscardTop.Image" width="96" height="144" />
+            }
+            else
+            {
+                <p>Ожидание хода...</p>
+            }
+        </div>
+        <div class="global-turn-timer">
+            ⏳ Осталось времени: @TurnSecondsLeft сек.
+        </div>
+    </div>
+
+    <div class="hand-container">
+        <h4>Твоя колода</h4>
+        @foreach (var card in Hand)
+        {
+            <img src="@card.Image" @onclick="() => PlayCard(card.Id)" />
+        }
+    </div>
+
+    @if (ShowTimeoutPopup)
+    {
+        <div class="modal-overlay">
+            <div class="modal">
+                <p>⏰ Время вашего хода истекло!</p>
+                <button class="btn-ok" @onclick="CloseTimeoutPopup">ОК</button>
+            </div>
+        </div>
+    }
+    @if (ShowWinPopup)
+    {
+        <div class="modal-overlay">
+            <div class="modal">
+                <p>🏆 Победил игрок: <strong>@WinnerName</strong>!</p>
+                <button class="btn-ok" @onclick="OnWinConfirmed">OK</button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string RoomCode { get; set; } = string.Empty;
+
+    private HubConnection? hub;
+    private List<Card> Hand = new();
+    private Card? DiscardTop;
+    private List<Player> Players = new();
+    Player CurrentPlayer = new();
+    private bool IsConnected = false;
+    private bool IsGameStarted = false;
+    private bool IsRoomFull = false;
+    private bool IsHost = false;
+    private string MyId = "";
+    private string Turn = "";
+    private bool ShowTimeoutPopup = false;
+    private DateTime TurnStartedAt;
+    private int TurnSecondsLeft = 20;
+    private Timer? Timer;
+    private bool ShowWinPopup = false;
+    private string WinnerName = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        hub = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/gamehub"))
+            .Build();
+
+        hub.On<string>("StartGameRedirect", (roomCode) =>
+        {
+            Navigation.NavigateTo($"/game/{roomCode}");
+        });
+        hub.On("Victory", async () =>
+        {
+            WinnerName = CurrentPlayer.Name;
+            ShowWinPopup = true;
+            await InvokeAsync(StateHasChanged);
+        });
+        hub.On("RoomFull", async () =>
+        {
+            IsRoomFull = true;
+            await InvokeAsync(StateHasChanged);
+        });
+
+        hub.On("TurnTimeout", async () =>
+        {
+            ShowTimeoutPopup = true;
+            await InvokeAsync(StateHasChanged);
+        });
+
+        hub.On<GameStateDto>("GameState", async state =>
+        {
+            Hand = state.Hand;
+            DiscardTop = state.DiscardTop;
+            Turn = state.Turn ?? "";
+            Players = state.Players.Select(p => new Player
+            {
+                Id = p.Id,
+                Name = p.Name,
+                Avatar = p.Avatar
+            }).ToList();
+
+            MyId = hub.ConnectionId ?? "";
+            IsConnected = true;
+            CurrentPlayer = state.CurrentPlayer;
+            IsHost = !IsGameStarted && Turn == MyId;
+            TurnStartedAt = state.TurnStartedAt;
+            StartTurnCountdown();
+            await InvokeAsync(StateHasChanged);
+        });
+
+        await hub.StartAsync();
+        await hub.SendAsync("JoinRoom", RoomCode);
+    }
+
+    private async Task PlayCard(string id)
+    {
+        if (hub != null)
+            await hub.SendAsync("PlayCard", RoomCode, id);
+    }
+
+    private async Task DrawCard()
+    {
+        if (hub != null)
+            await hub.SendAsync("DrawCard", RoomCode);
+    }
+
+    private async Task StartGame()
+    {
+        if (hub != null)
+        {
+            await hub.SendAsync("StartGame", RoomCode);
+            IsGameStarted = true;
+        }
+    }
+
+    private string GetPlayerStyle(string id)
+    {
+        int index = Players.FindIndex(p => p.Id == id);
+        int total = Players.Count;
+
+        if (index == -1 || total == 0)
+            return "left:0px; top:0px;";
+
+        double avatarSize = 86;
+        double centerX = 250;
+        double centerY = 250;
+        double radius = 250 - avatarSize / 2.0;
+
+        double angle = 2 * Math.PI * index / total - Math.PI / 2;
+
+        double x = centerX + radius * Math.Cos(angle) - avatarSize / 2;
+        double y = centerY + radius * Math.Sin(angle) - avatarSize / 2;
+
+        return $"left:{x}px; top:{y}px;";
+    }
+
+    private string GetMyPlayerName()
+    {
+        var me = Players.FirstOrDefault(p => p.Id == MyId);
+        return me?.Name ?? "???";
+    }
+
+    private void CloseTimeoutPopup()
+    {
+        ShowTimeoutPopup = false;
+    }
+
+    private void StartTurnCountdown()
+    {
+        Timer?.Dispose();
+        Timer = new Timer(_ =>
+        {
+            var elapsed = (DateTime.UtcNow - TurnStartedAt).TotalSeconds;
+            TurnSecondsLeft = Math.Max(0, (int)Math.Ceiling(20 - elapsed));
+            InvokeAsync(StateHasChanged);
+        }, null, 0, 1000);
+    }
+
+    private void OnWinConfirmed()
+    {
+        ShowWinPopup = false;
+        Navigation.NavigateTo("/");
+    }
+
+    public void Dispose()
+    {
+        Timer?.Dispose();
+    }
+}

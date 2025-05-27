@@ -21,6 +21,5 @@ app.UseRouting();
 app.MapBlazorHub();
 app.MapHub<GameHub>("/gamehub");
 app.MapFallbackToPage("/_Host");
-app.MapRazorPages();
 
 app.Run();
