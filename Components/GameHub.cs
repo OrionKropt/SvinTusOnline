@@ -1,17 +1,58 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using System.Timers;
+using SvinTusOnline.Models;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 public class GameHub : Hub
 {
     private readonly GameManager _manager;
-    private readonly System.Timers.Timer _timer;
 
     public GameHub(GameManager manager)
     {
         _manager = manager;
-        _timer = new System.Timers.Timer(10000);
-        _timer.Elapsed += CheckTimeouts;
-        _timer.Start();
+    }
+
+    private async Task StartTurnTimer(GameRoom room)
+    {
+        room.TurnTimeoutCts?.Cancel();
+        room.TurnTimeoutCts = new CancellationTokenSource();
+        var token = room.TurnTimeoutCts.Token;
+
+        var playerId = room.CurrentTurn;
+        room.TurnStartedAt = DateTime.UtcNow;
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(500, token); // проверка каждые 0.5 сек
+
+                var elapsed = (DateTime.UtcNow - room.TurnStartedAt).TotalSeconds;
+
+                // Ход уже сменился — значит, игрок успел сходить вручную
+                if (room.CurrentTurn != playerId)
+                    return;
+
+                if (elapsed >= 20)
+                {
+                    Console.WriteLine($"[INFO] Время игрока {room.CurrentTurn} истекло.");
+                    await Clients.Client(room.CurrentTurn!).SendAsync("TurnTimeout");
+
+                    await DrawCard(room.RoomCode);
+                    await AdvanceTurn(room);
+                    return;
+                }
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // Ход завершён вручную — всё в порядке
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[TIMER EXCEPTION] {ex.Message}");
+        }
     }
 
     public async Task JoinRoom(string roomCode)
@@ -56,48 +97,93 @@ public class GameHub : Hub
         }
     }
 
-    private void StartGame(GameRoom room)
+    public async Task StartGame(string roomCode)
     {
+        if (!_manager.Rooms.TryGetValue(roomCode, out var room)) return;
+        if (room.IsStarted) return;
+        room.IsStarted = true;
         room.InitDeck();
 
-        foreach (var player in room.Players.Values)
-        {
-            player.Hand = room.Deck.Take(5).ToList();
-            for (int i = 0; i < 5; i++) room.Deck.Dequeue();
-        }
+        _manager.DealCards(room);
 
-        room.Discard.Add(room.Deck.Dequeue());
-        room.CurrentTurn = room.Players.Keys.First();
-        room.LastMoveTime = DateTime.UtcNow;
+        room.Discard.Add(room.Deck[0]);
+        room.Deck.RemoveAt(0);
+
+        room.CurrentTurn = room.Players.First().Id;
+
+        await Clients.Group(roomCode).SendAsync("StartGameRedirect", roomCode);
+        await SendGameState(roomCode);
+        await AdvanceTurn(room);
     }
+
 
     private async Task SendGameState(string roomCode)
     {
         if (!_manager.Rooms.TryGetValue(roomCode, out var room)) return;
 
-        foreach (var player in room.Players.Values)
+        var remainingTime = GetRemainingTime(room);
+
+        foreach (var player in room.Players)
         {
-            await Clients.Client(player.ConnectionId).SendAsync("GameState", new
+            var state = new GameStateDto
             {
-                Hand = player.Hand,
+                Players = room.Players.Select(p => new Player
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    Avatar = p.Avatar
+                }).ToList(),
+                CurrentPlayer = room.CurrentPlayer,
+                Hand = room.Hands[player.Id],
                 DiscardTop = room.Discard.LastOrDefault(),
-                Turn = room.CurrentTurn
-            });
+                Turn = room.CurrentTurn,
+                TimeLeftSeconds = GetRemainingTime(room),
+                TurnStartedAt = room.TurnStartedAt
+            };
+
+            await Clients.Client(player.Id).SendAsync("GameState", state);
         }
     }
 
     private void CheckTimeouts(object? sender, ElapsedEventArgs e)
     {
-        foreach (var room in _manager.Rooms.Values)
+        if (!_manager.Rooms.TryGetValue(roomCode, out var room)) return;
+        if (room.Deck.Count == 0) return;
+
+        var hand = room.Hands[Context.ConnectionId];
+        hand.Add(room.Deck[0]);
+        room.Deck.RemoveAt(0);
+        await SendGameState(roomCode);
+    }
+
+    private async Task AdvanceTurn(GameRoom room)
+    {
+        var currentIndex = room.Players.FindIndex(p => p.Id == room.CurrentTurn);
+        var nextIndex = (currentIndex + 1) % room.Players.Count;
+
+        room.CurrentTurn = room.Players[nextIndex].Id;
+        room.CurrentPlayer = room.Players[nextIndex];
+        room.TurnStartedAt = DateTime.UtcNow;
+
+        await SendGameState(room.RoomCode);
+
+        _ = Task.Run(async () =>
         {
-            if ((DateTime.UtcNow - room.LastMoveTime).TotalSeconds > 15)
+            try
             {
-                var keys = room.Players.Keys.ToList();
-                int index = keys.IndexOf(room.CurrentTurn);
-                int nextIndex = (index + 1) % keys.Count;
-                room.CurrentTurn = keys[nextIndex];
-                room.LastMoveTime = DateTime.UtcNow;
+                await StartTurnTimer(room);
             }
-        }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TIMER ERROR] {ex.Message}");
+            }
+        });
+    }
+
+    private int GetRemainingTime(GameRoom room)
+    {
+        var elapsed = (DateTime.UtcNow - room.TurnStartedAt).TotalSeconds;
+        var remaining = 20 - elapsed;
+        return Math.Max(0, (int)Math.Ceiling(remaining));
     }
 }
