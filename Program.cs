@@ -8,6 +8,7 @@ builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<GameManager>();
+builder.Services.AddSingleton<TurnTimerService>();
 
 var app = builder.Build();
 if (!app.Environment.IsDevelopment())

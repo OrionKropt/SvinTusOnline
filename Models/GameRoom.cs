@@ -12,6 +12,7 @@ public class GameRoom
     public Player CurrentPlayer { get; set; } = new();
     public string? CurrentTurn { get; set; }
     public CancellationTokenSource? TurnTimeoutCts { get; set; }
+    public int TurnSecondsLeft { get; set; }
     public DateTime TurnStartedAt { get; set; }
 
     public void InitDeck()

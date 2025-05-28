@@ -1,88 +1,26 @@
 ﻿@page "/"
 @inject NavigationManager Navigation
-@using System.Text.Json
-@using Microsoft.AspNetCore.SignalR.Client
-@using System.Threading
 
-<h3>СвИнтус Онлайн</h3>
+<h1 class="page-title">Добро пожаловать в Свинтус 🐷</h1>
 
-@if (!connected)
-{
-    <input @bind="roomCode" placeholder="Код комнаты" />
-    <button @onclick="JoinRoom">Присоединиться</button>
-}
-else
-{
-    <h4>Твой ход: @((myId == turn) ? "ДА" : "нет")</h4>
+<div class="form-container">
+    <input class="input" placeholder="Введите код комнаты" @bind="RoomCode" />
 
-    <h5>Твоя рука:</h5>
-    <div>
-        @foreach (var card in hand)
-        {
-            <button @onclick="() => Play(card.Id)">@card.Color @card.Number</button>
-        }
-    </div>
+    <button @onclick="JoinRoom" class="btn btn-start">
+        Присоединиться
+    </button>
 
-    <h5>Последняя карта: @discard?.Color @discard?.Number</h5>
-}
+    <p class="hint">Или используйте любой код, чтобы создать новую комнату</p>
+</div>
 
 @code {
-    private HubConnection? hub;
-    private string roomCode = "SVIN";
-    private bool connected = false;
-    private string myId = "";
-    private List<Card> hand = new();
-    private Card? discard;
-    private string? turn;
+    private string RoomCode = "";
 
-    protected override async Task OnInitializedAsync()
+    private void JoinRoom()
     {
-        hub = new HubConnectionBuilder()
-            .WithUrl(Navigation.ToAbsoluteUri("/gamehub"))
-            .Build();
-
-        hub.On<string>("PlayerJoined", (_) =>
+        if (!string.IsNullOrWhiteSpace(RoomCode))
         {
-            StateHasChanged();
-        });
-
-        hub.On<JsonElement>("GameState", async (game) =>
-        {
-            hand = JsonSerializer.Deserialize<List<Card>>(game.GetProperty("Hand").ToString())!;
-            discard = JsonSerializer.Deserialize<Card>(game.GetProperty("DiscardTop").ToString());
-            turn = game.GetProperty("Turn").GetString();
-            StateHasChanged();
-            await InvokeAsync(StateHasChanged);
-        });
-
-        await hub.StartAsync();
-        myId = hub.ConnectionId;
-    }
-
-    
-    private async Task JoinRoom()
-    {
-        if (hub is not null)
-        {
-            await hub.InvokeAsync("JoinRoom", roomCode);
-            connected = true;
-            StateHasChanged(); // Добавлено явное обновление UI
+            Navigation.NavigateTo($"/game/{RoomCode.Trim()}");
         }
-    }
-
-    private async Task Play(string cardId)
-    {
-        if (hub is not null && myId == turn) // Добавлена проверка на ход
-        {
-            await hub.InvokeAsync("PlayCard", roomCode, cardId);
-        }
-    }
-    
-
-    public class Card
-    {
-        public string Color { get; set; } = "";
-        public int Number { get; set; }
-        public string Id => $"{Color}-{Number}";
     }
 }

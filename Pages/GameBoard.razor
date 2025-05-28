@@ -98,8 +98,8 @@ else
     private string MyId = "";
     private string Turn = "";
     private bool ShowTimeoutPopup = false;
-    private DateTime TurnStartedAt;
-    private int TurnSecondsLeft = 20;
+    private DateTime TurnStartedAt = DateTime.UtcNow;
+    private int TurnSecondsLeft;
     private Timer? Timer;
     private bool ShowWinPopup = false;
     private string WinnerName = "";
@@ -116,7 +116,7 @@ else
         });
         hub.On("Victory", async () =>
         {
-            WinnerName = CurrentPlayer.Name;
+            WinnerName = Players.First(p => p.Id == Turn).Name;
             ShowWinPopup = true;
             await InvokeAsync(StateHasChanged);
         });
@@ -128,28 +128,34 @@ else
 
         hub.On("TurnTimeout", async () =>
         {
-            ShowTimeoutPopup = true;
-            await InvokeAsync(StateHasChanged);
+            Console.WriteLine($"[CLIENT] TurnTimeout received, myId={MyId}, turn={Turn}");
+            if (Turn == MyId)
+            {
+                ShowTimeoutPopup = true;
+                await InvokeAsync(StateHasChanged);
+            }
         });
 
         hub.On<GameStateDto>("GameState", async state =>
         {
+            Console.WriteLine($"[CLIENT] GameState received: turn={state.Turn}, turnStartedAt={state.TurnStartedAt}");
             Hand = state.Hand;
             DiscardTop = state.DiscardTop;
             Turn = state.Turn ?? "";
             Players = state.Players.Select(p => new Player
             {
-                Id = p.Id,
-                Name = p.Name,
-                Avatar = p.Avatar
+                 Id = p.Id,
+                 Name = p.Name,
+                 Avatar = p.Avatar
             }).ToList();
 
             MyId = hub.ConnectionId ?? "";
             IsConnected = true;
-            CurrentPlayer = state.CurrentPlayer;
             IsHost = !IsGameStarted && Turn == MyId;
             TurnStartedAt = state.TurnStartedAt;
+
             StartTurnCountdown();
+
             await InvokeAsync(StateHasChanged);
         });
 
@@ -205,10 +211,7 @@ else
         return me?.Name ?? "???";
     }
 
-    private void CloseTimeoutPopup()
-    {
-        ShowTimeoutPopup = false;
-    }
+    private void CloseTimeoutPopup() => ShowTimeoutPopup = false;
 
     private void StartTurnCountdown()
     {

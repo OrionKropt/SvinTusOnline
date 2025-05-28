@@ -6,8 +6,6 @@ public class GameStateDto
     public Card? DiscardTop { get; set; }
     public string? Turn { get; set; }
     public List<Player> Players { get; set; } = new();
-    public Player CurrentPlayer { get; set; } = new();
-    public int TimeLeftSeconds { get; set; }
     public DateTime TurnStartedAt { get; set; }
-    public bool IsGameStarted {  get; set; }
+    public bool IsGameStarted { get; set; }
 }
